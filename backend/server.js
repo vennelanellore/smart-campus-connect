@@ -221,16 +221,32 @@ app.post(
       });
     }
 
-    const [result] = await pool.execute(
-      `INSERT INTO subjects (subject_name, subject_code, faculty_id)
-       VALUES (?, ?, ?)`,
-      [subject_name, subject_code, faculty_id || null]
-    );
 
-    res.status(201).json({
-      message: "Subject added.",
-      subject_id: result.insertId
-    });
+const [idRows] = await pool.query(
+  "SELECT NEXTVAL(attendance_id_seq) AS attendance_id"
+);
+
+const attendanceId = Number(idRows[0].attendance_id);
+
+await pool.execute(
+  `INSERT INTO attendance
+   (attendance_id, student_id, subject_id, attendance_date, status, marked_by)
+   VALUES (?, ?, ?, ?, ?, ?)`,
+  [
+    attendanceId,
+    student_id,
+    subject_id,
+    attendance_date,
+    status,
+    req.user.user_id
+  ]
+);
+
+res.status(201).json({
+  message: "Attendance saved.",
+  attendance_id: attendanceId
+});
+
   })
 );
 
