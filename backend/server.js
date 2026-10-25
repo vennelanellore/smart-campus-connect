@@ -1,4 +1,3 @@
-
 const express = require("express");
 const mysql = require("mysql2/promise");
 const cors = require("cors");
@@ -73,7 +72,6 @@ app.get("/api/health", (req, res) => {
 });
 
 // REGISTER
-// Public registration always creates a student account.
 app.post("/api/auth/register", asyncHandler(async (req, res) => {
   const { full_name, email, password, department } = req.body;
 
@@ -96,11 +94,14 @@ app.post("/api/auth/register", asyncHandler(async (req, res) => {
     });
   }
 
+  if (!process.env.JWT_SECRET) {
+    throw new Error("JWT_SECRET is not configured.");
+  }
+
   const normalizedName = full_name.trim();
   const normalizedEmail = email.trim().toLowerCase();
-  const password_hash = await bcrypt.hash(password, 10);
+  const passwordHash = await bcrypt.hash(password, 10);
 
-  // Get a unique ID from the existing TiDB sequence.
   const [idRows] = await pool.query(
     "SELECT NEXTVAL(user_id_seq) AS user_id"
   );
@@ -115,7 +116,7 @@ app.post("/api/auth/register", asyncHandler(async (req, res) => {
       userId,
       normalizedName,
       normalizedEmail,
-      password_hash,
+      passwordHash,
       department || null
     ]
   );
@@ -133,7 +134,7 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
   if (
     typeof email !== "string" ||
     typeof password !== "string" ||
-    !email ||
+    !email.trim() ||
     !password
   ) {
     return res.status(400).json({
@@ -166,7 +167,7 @@ app.post("/api/auth/login", asyncHandler(async (req, res) => {
   });
 }));
 
-// CURRENT LOGGED-IN USER
+// CURRENT USER
 app.get("/api/auth/me", authenticate, asyncHandler(async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT user_id, full_name, email, role, department
@@ -175,15 +176,13 @@ app.get("/api/auth/me", authenticate, asyncHandler(async (req, res) => {
   );
 
   if (!rows.length) {
-    return res.status(404).json({
-      message: "User not found."
-    });
+    return res.status(404).json({ message: "User not found." });
   }
 
   res.json(rows[0]);
 }));
 
-// USERS: ADMINISTRATOR ONLY
+// USERS
 app.get(
   "/api/users",
   authenticate,
@@ -193,11 +192,12 @@ app.get(
       `SELECT user_id, full_name, email, role, department, created_at
        FROM users ORDER BY user_id DESC`
     );
+
     res.json(rows);
   })
 );
 
-// SUBJECTS
+// GET SUBJECTS
 app.get("/api/subjects", authenticate, asyncHandler(async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT s.*, u.full_name AS faculty_name
@@ -205,9 +205,11 @@ app.get("/api/subjects", authenticate, asyncHandler(async (req, res) => {
      LEFT JOIN users u ON s.faculty_id = u.user_id
      ORDER BY s.subject_name`
   );
+
   res.json(rows);
 }));
 
+// ADD SUBJECT
 app.post(
   "/api/subjects",
   authenticate,
@@ -215,48 +217,79 @@ app.post(
   asyncHandler(async (req, res) => {
     const { subject_name, subject_code, faculty_id } = req.body;
 
-    if (!subject_name || !subject_code) {
+    if (
+      typeof subject_name !== "string" ||
+      typeof subject_code !== "string" ||
+      !subject_name.trim() ||
+      !subject_code.trim()
+    ) {
       return res.status(400).json({
         message: "Subject name and code are required."
       });
     }
 
+    const [result] = await pool.execute(
+      `INSERT INTO subjects
+       (subject_name, subject_code, faculty_id)
+       VALUES (?, ?, ?)`,
+      [
+        subject_name.trim(),
+        subject_code.trim(),
+        faculty_id || null
+      ]
+    );
 
-const [idRows] = await pool.query(
-  "SELECT NEXTVAL(attendance_id_seq) AS attendance_id"
-);
-
-const attendanceId = Number(idRows[0].attendance_id);
-
-await pool.execute(
-  `INSERT INTO attendance
-   (attendance_id, student_id, subject_id, attendance_date, status, marked_by)
-   VALUES (?, ?, ?, ?, ?, ?)`,
-  [
-    attendanceId,
-    student_id,
-    subject_id,
-    attendance_date,
-  status,
-    req.user.user_id
-  ]
-);
-
-res.status(201).json({
-  message: "Attendance saved.",
-  attendance_id: attendanceId
-});
-
-
+    res.status(201).json({
+      message: "Subject added.",
+      subject_id: result.insertId
+    });
   })
 );
 
+// GET ATTENDANCE
+app.get(
+  "/api/attendance",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const isStaff = ["admin", "faculty"].includes(req.user.role);
+    const requestedStudent = req.query.student_id;
+
+    let sql = `
+      SELECT a.*, u.full_name AS student_name,
+             s.subject_name, s.subject_code
+      FROM attendance a
+      JOIN users u ON a.student_id = u.user_id
+      JOIN subjects s ON a.subject_id = s.subject_id`;
+
+    const params = [];
+
+    if (isStaff && requestedStudent) {
+      sql += " WHERE a.student_id = ?";
+      params.push(requestedStudent);
+    } else if (!isStaff) {
+      sql += " WHERE a.student_id = ?";
+      params.push(req.user.user_id);
+    }
+
+    sql += " ORDER BY a.attendance_date DESC";
+
+    const [rows] = await pool.execute(sql, params);
+    res.json(rows);
+  })
+);
+
+// MARK ATTENDANCE
 app.post(
   "/api/attendance",
   authenticate,
   allowRoles("admin", "faculty"),
   asyncHandler(async (req, res) => {
-    const { student_id, subject_id, attendance_date, status } = req.body;
+    const {
+      student_id,
+      subject_id,
+      attendance_date,
+      status
+    } = req.body;
 
     if (
       !student_id ||
@@ -296,8 +329,7 @@ app.post(
   })
 );
 
-
-// RESULTS
+// GET RESULTS
 app.get("/api/results", authenticate, asyncHandler(async (req, res) => {
   const isStaff = ["admin", "faculty"].includes(req.user.role);
   const studentId = isStaff
@@ -328,6 +360,7 @@ app.get("/api/results", authenticate, asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
+// ADD RESULT
 app.post(
   "/api/results",
   authenticate,
@@ -343,14 +376,19 @@ app.post(
       published
     } = req.body;
 
+    const maxMarks = Number(max_marks ?? 100);
+    const numericMarks = Number(marks);
+
     if (
       !student_id ||
       !subject_id ||
       marks == null ||
       !semester ||
-      Number(marks) < 0 ||
-      Number(max_marks ?? 100) <= 0 ||
-      Number(marks) > Number(max_marks ?? 100)
+      !Number.isFinite(numericMarks) ||
+      !Number.isFinite(maxMarks) ||
+      numericMarks < 0 ||
+      maxMarks <= 0 ||
+      numericMarks > maxMarks
     ) {
       return res.status(400).json({
         message: "Provide valid student, subject, marks and semester."
@@ -365,8 +403,8 @@ app.post(
       [
         student_id,
         subject_id,
-        marks,
-        max_marks ?? 100,
+        numericMarks,
+        maxMarks,
         grade || null,
         semester,
         published ? 1 : 0,
@@ -381,7 +419,7 @@ app.post(
   })
 );
 
-// ANNOUNCEMENTS
+// GET ANNOUNCEMENTS
 app.get(
   "/api/announcements",
   authenticate,
@@ -393,16 +431,23 @@ app.get(
        WHERE a.expiry_date IS NULL OR a.expiry_date >= NOW()
        ORDER BY a.created_at DESC`
     );
+
     res.json(rows);
   })
 );
 
+// CREATE ANNOUNCEMENT
 app.post(
   "/api/announcements",
   authenticate,
   allowRoles("admin", "faculty"),
   asyncHandler(async (req, res) => {
-    const { title, message, target_audience, expiry_date } = req.body;
+    const {
+      title,
+      message,
+      target_audience,
+      expiry_date
+    } = req.body;
 
     if (!title || !message) {
       return res.status(400).json({
@@ -438,7 +483,7 @@ app.post(
   })
 );
 
-// EVENTS
+// GET EVENTS
 app.get("/api/events", authenticate, asyncHandler(async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT e.*, u.full_name AS creator_name
@@ -446,9 +491,11 @@ app.get("/api/events", authenticate, asyncHandler(async (req, res) => {
      JOIN users u ON e.created_by = u.user_id
      ORDER BY e.event_date`
   );
+
   res.json(rows);
 }));
 
+// CREATE EVENT
 app.post(
   "/api/events",
   authenticate,
@@ -492,7 +539,7 @@ app.post(
   })
 );
 
-// REGISTER FOR AN EVENT
+// REGISTER FOR EVENT
 app.post(
   "/api/events/:id/register",
   authenticate,
@@ -501,9 +548,7 @@ app.post(
     const eventId = Number(req.params.id);
 
     if (!Number.isInteger(eventId) || eventId < 1) {
-      return res.status(400).json({
-        message: "Invalid event ID."
-      });
+      return res.status(400).json({ message: "Invalid event ID." });
     }
 
     const [events] = await pool.execute(
@@ -513,9 +558,7 @@ app.post(
     );
 
     if (!events.length) {
-      return res.status(404).json({
-        message: "Event not found."
-      });
+      return res.status(404).json({ message: "Event not found." });
     }
 
     const event = events[0];
@@ -544,11 +587,9 @@ app.post(
 
     if (
       event.capacity != null &&
-      countRows[0].total >= event.capacity
+      Number(countRows[0].total) >= Number(event.capacity)
     ) {
-      return res.status(400).json({
-        message: "This event is full."
-      });
+      return res.status(400).json({ message: "This event is full." });
     }
 
     const [existing] = await pool.execute(
@@ -559,9 +600,7 @@ app.post(
     );
 
     if (existing.length && existing[0].status === "registered") {
-      return res.status(409).json({
-        message: "Already registered."
-      });
+      return res.status(409).json({ message: "Already registered." });
     }
 
     if (existing.length) {
@@ -586,6 +625,7 @@ app.post(
   })
 );
 
+// GET EVENT REGISTRATIONS
 app.get(
   "/api/event-registrations",
   authenticate,
@@ -616,65 +656,75 @@ app.get(
   })
 );
 
-// LOST AND FOUND
-app.get("/api/lost-found", authenticate, asyncHandler(async (req, res) => {
-  const [rows] = await pool.execute(
-    `SELECT l.*, u.full_name AS reporter_name
-     FROM lost_found l
-     JOIN users u ON l.reported_by = u.user_id
-     ORDER BY l.created_at DESC`
-  );
-  res.json(rows);
-}));
+// GET LOST AND FOUND
+app.get(
+  "/api/lost-found",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const [rows] = await pool.execute(
+      `SELECT l.*, u.full_name AS reporter_name
+       FROM lost_found l
+       JOIN users u ON l.reported_by = u.user_id
+       ORDER BY l.created_at DESC`
+    );
 
-app.post("/api/lost-found", authenticate, asyncHandler(async (req, res) => {
-  const {
-    item_name,
-    description,
-    item_type,
-    location,
-    item_date,
-    image_path
-  } = req.body;
+    res.json(rows);
+  })
+);
 
-  if (!item_name || !["lost", "found"].includes(item_type)) {
-    return res.status(400).json({
-      message: "Item name and valid item type (lost/found) are required."
-    });
-  }
-
-  const [result] = await pool.execute(
-    `INSERT INTO lost_found
-     (reported_by, item_name, description, item_type,
-      location, item_date, image_path)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [
-      req.user.user_id,
+// REPORT LOST OR FOUND ITEM
+app.post(
+  "/api/lost-found",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const {
       item_name,
-      description || null,
+      description,
       item_type,
-      location || null,
-      item_date || null,
-      image_path || null
-    ]
-  );
+      location,
+      item_date,
+      image_path
+    } = req.body;
 
-  res.status(201).json({
-    message: "Lost/found item reported.",
-    item_id: result.insertId
-  });
-}));
+    if (!item_name || !["lost", "found"].includes(item_type)) {
+      return res.status(400).json({
+        message: "Item name and valid item type (lost/found) are required."
+      });
+    }
 
+    const [result] = await pool.execute(
+      `INSERT INTO lost_found
+       (reported_by, item_name, description, item_type,
+        location, item_date, image_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        req.user.user_id,
+        item_name,
+        description || null,
+        item_type,
+        location || null,
+        item_date || null,
+        image_path || null
+      ]
+    );
+
+    res.status(201).json({
+      message: "Lost/found item reported.",
+      item_id: result.insertId
+    });
+  })
+);
+
+// UPDATE LOST AND FOUND STATUS
 app.patch(
   "/api/lost-found/:id/status",
   authenticate,
+  allowRoles("admin", "faculty"),
   asyncHandler(async (req, res) => {
     const { status } = req.body;
 
     if (!["open", "claimed", "returned", "closed"].includes(status)) {
-      return res.status(400).json({
-        message: "Invalid item status."
-      });
+      return res.status(400).json({ message: "Invalid item status." });
     }
 
     const [result] = await pool.execute(
@@ -683,16 +733,14 @@ app.patch(
     );
 
     if (!result.affectedRows) {
-      return res.status(404).json({
-        message: "Item not found."
-      });
+      return res.status(404).json({ message: "Item not found." });
     }
 
     res.json({ message: "Item status updated." });
   })
 );
 
-// SERVICE REQUESTS
+// GET SERVICE REQUESTS
 app.get(
   "/api/service-requests",
   authenticate,
@@ -721,6 +769,7 @@ app.get(
   })
 );
 
+// UPDATE SERVICE REQUEST
 app.patch(
   "/api/service-requests/:id",
   authenticate,
@@ -737,9 +786,7 @@ app.patch(
     ];
 
     if (status && !allowedStatuses.includes(status)) {
-      return res.status(400).json({
-        message: "Invalid request status."
-      });
+      return res.status(400).json({ message: "Invalid request status." });
     }
 
     const fields = [];
@@ -761,9 +808,7 @@ app.patch(
     }
 
     if (!fields.length) {
-      return res.status(400).json({
-        message: "No updates provided."
-      });
+      return res.status(400).json({ message: "No updates provided." });
     }
 
     values.push(req.params.id);
@@ -776,16 +821,14 @@ app.patch(
     );
 
     if (!result.affectedRows) {
-      return res.status(404).json({
-        message: "Request not found."
-      });
+      return res.status(404).json({ message: "Request not found." });
     }
 
     res.json({ message: "Service request updated." });
   })
 );
 
-// DELETE EVENTS: ADMIN ONLY
+// DELETE EVENT
 app.delete(
   "/api/events/:id",
   authenticate,
@@ -797,16 +840,14 @@ app.delete(
     );
 
     if (!result.affectedRows) {
-      return res.status(404).json({
-        message: "Event not found."
-      });
+      return res.status(404).json({ message: "Event not found." });
     }
 
     res.json({ message: "Event deleted." });
   })
 );
 
-// DELETE ANNOUNCEMENTS: ADMIN ONLY
+// DELETE ANNOUNCEMENT
 app.delete(
   "/api/announcements/:id",
   authenticate,
@@ -818,9 +859,7 @@ app.delete(
     );
 
     if (!result.affectedRows) {
-      return res.status(404).json({
-        message: "Announcement not found."
-      });
+      return res.status(404).json({ message: "Announcement not found." });
     }
 
     res.json({ message: "Announcement deleted." });
@@ -829,7 +868,7 @@ app.delete(
 
 // CENTRAL ERROR HANDLER
 app.use((err, req, res, next) => {
-  console.error(err);
+  console.error("API error:", err);
 
   if (err.code === "ER_DUP_ENTRY") {
     return res.status(409).json({
@@ -858,11 +897,15 @@ async function startServer() {
   let connection;
 
   try {
+    if (!process.env.JWT_SECRET) {
+      throw new Error("JWT_SECRET is not configured.");
+    }
+
     connection = await pool.getConnection();
     await connection.ping();
-    console.log("MySQL database connected successfully!");
+    console.log("Database connected successfully.");
   } catch (error) {
-    console.error("Could not connect to MySQL:", error.message);
+    console.error("Could not connect to database:", error.message);
     process.exit(1);
   } finally {
     if (connection) {
@@ -872,7 +915,6 @@ async function startServer() {
 
   app.listen(PORT, () => {
     console.log(`Smart Campus Connect backend running on port ${PORT}`);
-    console.log("Health check: /api/health");
   });
 }
 
