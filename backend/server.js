@@ -251,33 +251,6 @@ res.status(201).json({
   })
 );
 
-// ATTENDANCE
-app.get("/api/attendance", authenticate, asyncHandler(async (req, res) => {
-  const isStaff = ["admin", "faculty"].includes(req.user.role);
-  const studentId = isStaff
-    ? (req.query.student_id || null)
-    : req.user.user_id;
-
-  let sql = `
-    SELECT a.*, u.full_name AS student_name,
-           s.subject_name, s.subject_code
-    FROM attendance a
-    JOIN users u ON a.student_id = u.user_id
-    JOIN subjects s ON a.subject_id = s.subject_id`;
-
-  const params = [];
-
-  if (studentId) {
-    sql += " WHERE a.student_id = ?";
-    params.push(studentId);
-  }
-
-  sql += " ORDER BY a.attendance_date DESC";
-
-  const [rows] = await pool.execute(sql, params);
-  res.json(rows);
-}));
-
 app.post(
   "/api/attendance",
   authenticate,
@@ -296,11 +269,18 @@ app.post(
       });
     }
 
-    const [result] = await pool.execute(
+    const [idRows] = await pool.query(
+      "SELECT NEXTVAL(attendance_id_seq) AS attendance_id"
+    );
+
+    const attendanceId = Number(idRows[0].attendance_id);
+
+    await pool.execute(
       `INSERT INTO attendance
-       (student_id, subject_id, attendance_date, status, marked_by)
-       VALUES (?, ?, ?, ?, ?)`,
+       (attendance_id, student_id, subject_id, attendance_date, status, marked_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
+        attendanceId,
         student_id,
         subject_id,
         attendance_date,
@@ -311,10 +291,11 @@ app.post(
 
     res.status(201).json({
       message: "Attendance saved.",
-      attendance_id: result.insertId
+      attendance_id: attendanceId
     });
   })
 );
+
 
 // RESULTS
 app.get("/api/results", authenticate, asyncHandler(async (req, res) => {
