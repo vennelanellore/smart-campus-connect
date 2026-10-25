@@ -237,7 +237,7 @@ await pool.execute(
     student_id,
     subject_id,
     attendance_date,
-    status,
+  status,
     req.user.user_id
   ]
 );
@@ -246,6 +246,7 @@ res.status(201).json({
   message: "Attendance saved.",
   attendance_id: attendanceId
 });
+
 
   })
 );
