@@ -599,13 +599,20 @@ app.post(
          WHERE registration_id = ?`,
         [existing[0].registration_id]
       );
-    } else {
-      await pool.execute(
-        `INSERT INTO event_registrations (event_id, student_id)
-         VALUES (?, ?)`,
-        [eventId, req.user.user_id]
-      );
-    }
+ } else {
+  const [idRows] = await pool.query(
+    "SELECT NEXTVAL(event_registration_id_seq) AS registration_id"
+  );
+
+  const registrationId = Number(idRows[0].registration_id);
+
+  await pool.execute(
+    `INSERT INTO event_registrations
+     (registration_id, event_id, student_id)
+     VALUES (?, ?, ?)`,
+    [registrationId, eventId, req.user.user_id]
+  );
+}
 
     res.status(201).json({
       message: "Event registration successful."
