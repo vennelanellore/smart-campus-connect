@@ -892,22 +892,42 @@ app.patch(
   })
 );
 
-// DELETE EVENT
 app.delete(
   "/api/events/:id",
   authenticate,
   allowRoles("admin"),
   asyncHandler(async (req, res) => {
-    const [result] = await pool.execute(
-      "DELETE FROM events WHERE event_id = ?",
-      [req.params.id]
-    );
+    const connection = await pool.getConnection();
 
-    if (!result.affectedRows) {
-      return res.status(404).json({ message: "Event not found." });
+    try {
+      await connection.beginTransaction();
+
+      // Delete registrations linked to this event
+      await connection.execute(
+        "DELETE FROM event_registrations WHERE event_id = ?",
+        [req.params.id]
+      );
+
+      // Delete the event
+      const [result] = await connection.execute(
+        "DELETE FROM events WHERE event_id = ?",
+        [req.params.id]
+      );
+
+      if (!result.affectedRows) {
+        await connection.rollback();
+        return res.status(404).json({ message: "Event not found." });
+      }
+
+      await connection.commit();
+
+      res.json({ message: "Event deleted successfully." });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
-
-    res.json({ message: "Event deleted." });
   })
 );
 
