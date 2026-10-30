@@ -762,7 +762,70 @@ app.get(
     res.json(rows);
   })
 );
+// CREATE SERVICE REQUEST
+app.post(
+  "/api/service-requests",
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const {
+      title,
+      description,
+      category,
+      location,
+      image_path
+    } = req.body;
 
+    const validCategories = [
+      "electrical",
+      "water",
+      "cleaning",
+      "classroom",
+      "laboratory",
+      "network",
+      "other"
+    ];
+
+    const selectedCategory = category || "other";
+
+    if (
+      !title ||
+      !description ||
+      !location ||
+      !validCategories.includes(selectedCategory)
+    ) {
+      return res.status(400).json({
+        message: "Title, description, location and valid category are required."
+      });
+    }
+
+    const [idRows] = await pool.query(
+      "SELECT NEXTVAL(service_request_id_seq) AS request_id"
+    );
+
+    const requestId = Number(idRows[0].request_id);
+
+    await pool.execute(
+      `INSERT INTO service_requests
+       (request_id, submitted_by, title, description,
+        category, location, image_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        requestId,
+        req.user.user_id,
+        title,
+        description,
+        selectedCategory,
+        location,
+        image_path || null
+      ]
+    );
+
+    res.status(201).json({
+      message: "Service request submitted successfully.",
+      request_id: requestId
+    });
+  })
+);
 // UPDATE SERVICE REQUEST
 app.patch(
   "/api/service-requests/:id",
