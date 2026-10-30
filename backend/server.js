@@ -329,37 +329,6 @@ app.post(
   })
 );
 
-// GET RESULTS
-app.get("/api/results", authenticate, asyncHandler(async (req, res) => {
-  const isStaff = ["admin", "faculty"].includes(req.user.role);
-  const studentId = isStaff
-    ? (req.query.student_id || null)
-    : req.user.user_id;
-
-  let sql = `
-    SELECT r.*, s.subject_name, s.subject_code
-    FROM results r
-    JOIN subjects s ON r.subject_id = s.subject_id`;
-
-  const params = [];
-
-  if (studentId) {
-    sql += " WHERE r.student_id = ?";
-    params.push(studentId);
-
-    if (!isStaff) {
-      sql += " AND r.published = TRUE";
-    }
-  } else {
-    sql += " WHERE r.published = TRUE";
-  }
-
-  sql += " ORDER BY r.semester, s.subject_name";
-
-  const [rows] = await pool.execute(sql, params);
-  res.json(rows);
-}));
-
 // ADD RESULT
 app.post(
   "/api/results",
@@ -395,12 +364,19 @@ app.post(
       });
     }
 
-    const [result] = await pool.execute(
+    const [idRows] = await pool.query(
+      "SELECT NEXTVAL(result_id_seq) AS result_id"
+    );
+
+    const resultId = Number(idRows[0].result_id);
+
+    await pool.execute(
       `INSERT INTO results
-       (student_id, subject_id, marks, max_marks, grade,
+       (result_id, student_id, subject_id, marks, max_marks, grade,
         semester, published, uploaded_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        resultId,
         student_id,
         subject_id,
         numericMarks,
@@ -414,7 +390,7 @@ app.post(
 
     res.status(201).json({
       message: "Result saved.",
-      result_id: result.insertId
+      result_id: resultId
     });
   })
 );
@@ -435,7 +411,6 @@ app.get(
     res.json(rows);
   })
 );
-
 // CREATE ANNOUNCEMENT
 app.post(
   "/api/announcements",
@@ -463,11 +438,18 @@ app.post(
       });
     }
 
-    const [result] = await pool.execute(
+    const [idRows] = await pool.query(
+      "SELECT NEXTVAL(announcement_id_seq) AS announcement_id"
+    );
+
+    const announcementId = Number(idRows[0].announcement_id);
+
+    await pool.execute(
       `INSERT INTO announcements
-       (title, message, target_audience, created_by, expiry_date)
-       VALUES (?, ?, ?, ?, ?)`,
+       (announcement_id, title, message, target_audience, created_by, expiry_date)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
+        announcementId,
         title,
         message,
         audience,
@@ -478,11 +460,10 @@ app.post(
 
     res.status(201).json({
       message: "Announcement created.",
-      announcement_id: result.insertId
+      announcement_id: announcementId
     });
   })
 );
-
 // GET EVENTS
 app.get("/api/events", authenticate, asyncHandler(async (req, res) => {
   const [rows] = await pool.execute(
@@ -516,12 +497,19 @@ app.post(
       });
     }
 
-    const [result] = await pool.execute(
+    const [idRows] = await pool.query(
+      "SELECT NEXTVAL(event_id_seq) AS event_id"
+    );
+
+    const eventId = Number(idRows[0].event_id);
+
+    await pool.execute(
       `INSERT INTO events
-       (event_name, description, event_date, registration_deadline,
-        location, capacity, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (event_id, event_name, description, event_date,
+        registration_deadline, location, capacity, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        eventId,
         event_name,
         description || null,
         event_date,
@@ -534,7 +522,7 @@ app.post(
 
     res.status(201).json({
       message: "Event created.",
-      event_id: result.insertId
+      event_id: eventId
     });
   })
 );
@@ -673,6 +661,7 @@ app.get(
 );
 
 // REPORT LOST OR FOUND ITEM
+a// REPORT LOST OR FOUND ITEM
 app.post(
   "/api/lost-found",
   authenticate,
@@ -692,12 +681,19 @@ app.post(
       });
     }
 
-    const [result] = await pool.execute(
+    const [idRows] = await pool.query(
+      "SELECT NEXTVAL(lost_found_id_seq) AS item_id"
+    );
+
+    const itemId = Number(idRows[0].item_id);
+
+    await pool.execute(
       `INSERT INTO lost_found
-       (reported_by, item_name, description, item_type,
+       (item_id, reported_by, item_name, description, item_type,
         location, item_date, image_path)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        itemId,
         req.user.user_id,
         item_name,
         description || null,
@@ -710,11 +706,10 @@ app.post(
 
     res.status(201).json({
       message: "Lost/found item reported.",
-      item_id: result.insertId
+      item_id: itemId
     });
   })
 );
-
 // UPDATE LOST AND FOUND STATUS
 app.patch(
   "/api/lost-found/:id/status",
